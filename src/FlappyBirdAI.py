@@ -1,6 +1,10 @@
 import pygame
 import os
 import random
+import neat
+
+ai_playing = True
+generation = 0
 
 WIDTH_SCREEN = 500
 HEIGHT_SCREEN = 800
@@ -181,14 +185,36 @@ def draw_screen(screen, birds, pipes, ground, score):
 
     text_score = FONT.render(f"Pontuação: {score}", 1, (255, 255, 255))
     screen.blit(text_score, (WIDTH_SCREEN - 10 - text_score.get_width(), 10))
+
+    if ai_playing:
+        text_generation = FONT.render(f"Geração: {generation}", 1, (255, 255, 255))
+        screen.blit(text_generation, (10, 10))
                 
     ground.draw(screen)
 
     pygame.display.update()
 
-def main():
+def main(genomes, config): # fitness function
 
-    birds = [Bird(230, 350)]
+    global generation
+    generation += 1
+
+    if ai_playing:
+        networks = []
+        genomes_list = []
+        birds = []
+
+        for _, genome in genomes:
+            network = neat.nn.FeedForwardNetwork.create(genome, config)
+
+            networks.append(network)
+            genome.fitness = 0
+            genomes_list.append(genome)
+            birds.append(Bird(230, 350))
+
+    else:
+        birds = [Bird(230, 350)]
+
     ground = Ground(730)
     pipes = [Pipe(700)]
     screen = pygame.display.set_mode((WIDTH_SCREEN, HEIGHT_SCREEN))
@@ -207,14 +233,30 @@ def main():
                 pygame.quit()
                 quit()
 
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_SPACE:
-                    for bird in birds:
-                        bird.jump()
-            
-        for bird in birds:
+            if not ai_playing:
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_SPACE:
+                        for bird in birds:
+                            bird.jump()
+
+        pipe_index = 0
+        if len(birds) > 0:
+            if len(pipes) > 1 and birds[0].x > (pipes[0].x + pipes[0].TOP_PIPE.get_width()):
+                pipe_index = 1
+        else:
+            running = False
+            break
+                
+        for i, bird in enumerate(birds):
             bird.move()
-        
+            genomes_list[i].fitness += 0.1
+            output = networks[i].activate((bird.y, 
+                                          abs(bird.y - pipes[pipe_index].height),
+                                          abs(bird.y - pipes[pipe_index].bot_position)))
+            
+            if output[0] > 0.5:
+                bird.jump()
+
         ground.move()
 
         add_pipe = False
@@ -223,6 +265,11 @@ def main():
             for i, bird in enumerate(birds):
                 if pipe.collide(bird):
                     birds.pop(i)
+
+                    if ai_playing:
+                        genomes_list[i].fitness -= 1
+                        genomes_list.pop(i)
+                        networks.pop(i)
                     
                 if not pipe.passed and bird.x > pipe.x:
                     pipe.passed = True
@@ -236,14 +283,40 @@ def main():
         if add_pipe:
             score += 1
             pipes.append(Pipe(600))
+            
+            for genome in genomes_list:
+                genome.fitness += 5
+
         for pipe in delete_pipe:
             pipes.remove(pipe)
 
         for i, bird in enumerate(birds):
             if (bird.y + bird.image.get_height()) > ground.y or bird.y < 0:
-                birds.pop(i)                
+                birds.pop(i)
+
+                if ai_playing:
+                    genomes_list.pop(i)
+                    networks.pop(i)
 
         draw_screen(screen, birds, pipes, ground, score)
 
+def run(config_path):
+    config = neat.config.Config(neat.DefaultGenome,
+                                neat.DefaultReproduction,
+                                neat.DefaultSpeciesSet,
+                                neat.DefaultStagnation,
+                                config_path)
+    
+    population = neat.Population(config)
+    population.add_reporter(neat.StdOutReporter(True))
+    population.add_reporter(neat.StatisticsReporter())
+
+    if ai_playing:
+        population.run(main, 50)
+    else:
+        main(None, None)
+
 if __name__ == '__main__':
-    main()
+    path = os.path.dirname(__file__)
+    config_path = os.path.join(path, 'config.txt')
+    run(config_path)
